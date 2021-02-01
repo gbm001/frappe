@@ -62,11 +62,14 @@ class CustomField(Document):
 
 		# update the schema
 		if not frappe.db.get_value('DocType', self.dt, 'issingle'):
-			if (self.fieldname not in frappe.db.get_table_columns(self.dt)
-				or getattr(self, "_old_fieldtype", None) != self.fieldtype):
-				frappe.db.updatedb(self.dt)
+			frappe.db.updatedb(self.dt)
 
 	def on_trash(self):
+		#check if Admin owned field
+		if self.owner == 'Administrator' and frappe.session.user != 'Administrator':
+			frappe.throw(_("Custom Field {0} is created by the Administrator and can only be deleted through the Administrator account.").format(
+					frappe.bold(self.label)))
+
 		# delete property setter entries
 		frappe.db.sql("""\
 			DELETE FROM `tabProperty Setter`

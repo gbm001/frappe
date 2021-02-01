@@ -57,6 +57,10 @@ def get_monthly_goal_graph_data(title, doctype, docname, goal_value_field, goal_
 	from frappe.utils.formatters import format_value
 	import json
 
+	# should have atleast read perm
+	if not frappe.has_permission(goal_doctype):
+		return None
+
 	meta = frappe.get_meta(doctype)
 	doc = frappe.get_doc(doctype, docname)
 
@@ -80,7 +84,6 @@ def get_monthly_goal_graph_data(title, doctype, docname, goal_value_field, goal_
 		if filter_str:
 			doc_filter += ' and ' + filter_str if doc_filter else filter_str
 		month_to_value_dict = get_monthly_results(goal_doctype, goal_field, date_field, doc_filter, aggregation)
-		frappe.db.set_value(doctype, docname, goal_history_field, json.dumps(month_to_value_dict))
 
 	month_to_value_dict[current_month_year] = current_month_value
 

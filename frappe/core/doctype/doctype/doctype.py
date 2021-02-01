@@ -24,6 +24,7 @@ from frappe.modules import make_boilerplate, get_doc_path
 from frappe.database.schema import validate_column_name, validate_column_length
 from frappe.model.docfield import supports_translation
 from frappe.modules.import_file import get_file_path
+from frappe.model.meta import Meta
 
 
 class InvalidFieldNameError(frappe.ValidationError): pass
@@ -275,7 +276,7 @@ class DocType(Document):
 		"""Update database schema, make controller templates if `custom` is not set and clear cache."""
 		self.delete_duplicate_custom_fields()
 		try:
-			frappe.db.updatedb(self.name, self)
+			frappe.db.updatedb(self.name, Meta(self))
 		except Exception as e:
 			print("\n\nThere was an issue while migrating the DocType: {}\n".format(self.name))
 			raise e
@@ -311,7 +312,6 @@ class DocType(Document):
 			del frappe.local.meta_cache[self.name]
 
 		clear_linked_doctype_cache()
-
 
 	def delete_duplicate_custom_fields(self):
 		if not (frappe.db.table_exists(self.name) and frappe.db.table_exists("Custom Field")):
@@ -495,7 +495,8 @@ class DocType(Document):
 						field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict['fields']))
 						if field_dict:
 							new_field_dicts.append(field_dict[0])
-							remaining_field_names.remove(fieldname)
+							if fieldname in remaining_field_names:
+								remaining_field_names.remove(fieldname)
 
 					for fieldname in remaining_field_names:
 						field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict['fields']))
@@ -517,7 +518,8 @@ class DocType(Document):
 				field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict.get('fields', [])))
 				if field_dict:
 					new_field_dicts.append(field_dict[0])
-					remaining_field_names.remove(fieldname)
+					if fieldname in remaining_field_names:
+						remaining_field_names.remove(fieldname)
 
 			for fieldname in remaining_field_names:
 				field_dict = list(filter(lambda d: d['fieldname'] == fieldname, docdict.get('fields', [])))
@@ -583,12 +585,14 @@ class DocType(Document):
 				create_custom_field(self.name, df)
 
 	def validate_nestedset(self):
-		if not self.is_tree:
+		if not self.get('is_tree'):
 			return
 		self.add_nestedset_fields()
-		# set field as mandatory
-		field = self.meta.get_field('nsm_parent_field')
-		field.reqd = 1
+
+		if not self.nsm_parent_field:
+			field_label = frappe.bold(_("Parent Field (Tree)"))
+			frappe.throw(_("{0} is a mandatory field").format(field_label), frappe.MandatoryError)
+
 		# check if field is valid
 		fieldnames = [df.fieldname for df in self.fields]
 		if self.nsm_parent_field and self.nsm_parent_field not in fieldnames:
@@ -652,13 +656,15 @@ class DocType(Document):
 		if not name:
 			name = self.name
 
+		flags = {"flags": re.ASCII} if six.PY3 else {}
+
+		# a DocType name should not start or end with an empty space
+		if re.match("^[ \t\n\r]+|[ \t\n\r]+$", name, **flags):
+			frappe.throw(_("DocType's name should not start or end with whitespace"), frappe.NameError)
+
 		# a DocType's name should not start with a number or underscore
 		# and should only contain letters, numbers and underscore
-		if six.PY2:
-			is_a_valid_name = re.match("^(?![\W])[^\d_\s][\w ]+$", name)
-		else:
-			is_a_valid_name = re.match("^(?![\W])[^\d_\s][\w ]+$", name, flags = re.ASCII)
-		if not is_a_valid_name:
+		if not re.match("^(?![\W])[^\d_\s][\w ]+$", name, **flags):
 			frappe.throw(_("DocType's name should start with a letter and it can only consist of letters, numbers, spaces and underscores"), frappe.NameError)
 
 
@@ -692,6 +698,13 @@ def validate_fields(meta):
 		validate_column_name(fieldname)
 
 
+	def check_invalid_fieldnames(docname, fieldname):
+		invalid_fields = ('doctype',)
+		if fieldname in invalid_fields:
+			frappe.throw(_("{0}: Fieldname cannot be one of {1}")
+				.format(docname, ", ".join([frappe.bold(d) for d in invalid_fields])))
+
+
 	def check_unique_fieldname(docname, fieldname):
 		duplicates = list(filter(None, map(lambda df: df.fieldname==fieldname and str(df.idx) or None, fields)))
 		if len(duplicates) > 1:
@@ -719,8 +732,8 @@ def validate_fields(meta):
 				if not options:
 					frappe.throw(_("{0}: Options must be a valid DocType for field {1} in row {2}").format(docname, d.label, d.idx), WrongOptionsDoctypeLinkError)
 				elif not (options == d.options):
-					frappe.throw(_("{0}: Options {1} must be the same as doctype name {2} for the field {3}", DoctypeLinkError)
-						.format(docname, d.options, options, d.label))
+					frappe.throw(_("{0}: Options {1} must be the same as doctype name {2} for the field {3}")
+						.format(docname, d.options, options, d.label), DoctypeLinkError)
 				else:
 					# fix case
 					d.options = options
@@ -949,6 +962,7 @@ def validate_fields(meta):
 			d.fieldname = d.fieldname.lower()
 
 		check_illegal_characters(d.fieldname)
+		check_invalid_fieldnames(meta.get("name"), d.fieldname)
 		check_unique_fieldname(meta.get("name"), d.fieldname)
 		check_fieldname_length(d.fieldname)
 		check_illegal_mandatory(meta.get("name"), d)
@@ -973,10 +987,10 @@ def validate_fields(meta):
 	check_image_field(meta)
 
 
-def validate_permissions_for_doctype(doctype, for_remove=False):
+def validate_permissions_for_doctype(doctype, for_remove=False, alert=False):
 	"""Validates if permissions are set correctly."""
 	doctype = frappe.get_doc("DocType", doctype)
-	validate_permissions(doctype, for_remove)
+	validate_permissions(doctype, for_remove, alert=alert)
 
 	# save permissions
 	for perm in doctype.get("permissions"):
@@ -999,10 +1013,10 @@ def clear_permissions_cache(doctype):
 		""", doctype):
 		frappe.clear_cache(user=user)
 
-
-def validate_permissions(doctype, for_remove=False):
+def validate_permissions(doctype, for_remove=False, alert=False):
 	permissions = doctype.get("permissions")
-	if not permissions:
+	# Some DocTypes may not have permissions by default, don't show alert for them
+	if not permissions and alert:
 		frappe.msgprint(_('No Permissions Specified'), alert=True, indicator='orange')
 	issingle = issubmittable = isimportable = False
 	if doctype:

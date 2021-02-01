@@ -117,18 +117,20 @@ frappe.ui.form.Form = class FrappeForm {
 
 	add_nav_keyboard_shortcuts() {
 		frappe.ui.keys.add_shortcut({
-			shortcut: 'shift+>',
+			shortcut: 'shift+ctrl+>',
 			action: () => this.navigate_records(0),
 			page: this.page,
 			description: __('Go to next record'),
+			ignore_inputs: true,
 			condition: () => !this.is_new()
 		});
 
 		frappe.ui.keys.add_shortcut({
-			shortcut: 'shift+<',
+			shortcut: 'shift+ctrl+<',
 			action: () => this.navigate_records(1),
 			page: this.page,
 			description: __('Go to previous record'),
+			ignore_inputs: true,
 			condition: () => !this.is_new()
 		});
 	}
@@ -188,8 +190,12 @@ frappe.ui.form.Form = class FrappeForm {
 				} else {
 					me.dirty();
 				}
-				me.fields_dict[fieldname]
-					&& me.fields_dict[fieldname].refresh(fieldname);
+
+				let field = me.fields_dict[fieldname];
+				field && field.refresh(fieldname);
+
+				// Validate value for link field explicitly
+				field && ["Link", "Dynamic Link"].includes(field.df.fieldtype) && field.validate && field.validate(value);
 
 				me.layout.refresh_dependency();
 				let object = me.script_manager.trigger(fieldname, doc.doctype, doc.name);
@@ -231,14 +237,10 @@ frappe.ui.form.Form = class FrappeForm {
 					throw "attach error";
 				}
 
-				if(me.attachments.max_reached()) {
-					frappe.msgprint(__("Maximum Attachment Limit for this record reached."));
-					throw "attach error";
-				}
-
 				new frappe.ui.FileUploader({
 					doctype: me.doctype,
 					docname: me.docname,
+					frm: me,
 					files: dataTransfer.files,
 					folder: 'Home/Attachments',
 					on_success(file_doc) {
@@ -316,7 +318,6 @@ frappe.ui.form.Form = class FrappeForm {
 	switch_doc(docname) {
 		// record switch
 		if(this.docname != docname && (!this.meta.in_dialog || this.in_form) && !this.meta.istable) {
-			frappe.utils.scroll_to(0);
 			if (this.print_preview) {
 				this.print_preview.hide();
 			}
@@ -651,15 +652,24 @@ frappe.ui.form.Form = class FrappeForm {
 			frappe.msgprint(__('"amended_from" field must be present to do an amendment.'));
 			return;
 		}
-		this.validate_form_action("Amend");
-		var me = this;
-		var fn = function(newdoc) {
-			newdoc.amended_from = me.docname;
-			if(me.fields_dict && me.fields_dict['amendment_date'])
-				newdoc.amendment_date = frappe.datetime.obj_to_str(new Date());
-		};
-		this.copy_doc(fn, 1);
-		frappe.utils.play_sound("click");
+
+		frappe.xcall('frappe.client.is_document_amended', {
+			'doctype': this.doc.doctype,
+			'docname': this.doc.name
+		}).then(is_amended => {
+			if (is_amended) {
+				frappe.throw(__('This document is already amended, you cannot ammend it again'));
+			}
+			this.validate_form_action("Amend");
+			var me = this;
+			var fn = function(newdoc) {
+				newdoc.amended_from = me.docname;
+				if (me.fields_dict && me.fields_dict['amendment_date'])
+					newdoc.amendment_date = frappe.datetime.obj_to_str(new Date());
+			};
+			this.copy_doc(fn, 1);
+			frappe.utils.play_sound("click");
+		});
 	}
 
 	validate_form_action(action, resolve) {
@@ -824,21 +834,41 @@ frappe.ui.form.Form = class FrappeForm {
 	}
 
 	navigate_records(prev) {
-		let list_settings = frappe.get_user_settings(this.doctype)['List'];
+		let filters, sort_field, sort_order;
+		let list_view = frappe.get_list_view(this.doctype);
+		if (list_view) {
+			filters = list_view.get_filters_for_args();
+			sort_field = list_view.sort_field;
+			sort_order = list_view.sort_order;
+		} else {
+			let list_settings = frappe.get_user_settings(this.doctype)['List'];
+			if (list_settings) {
+				filters = list_settings.filters;
+				sort_field = list_settings.sort_field;
+				sort_order = list_settings.sort_order;
+			}
+		}
+
 		let args = {
 			doctype: this.doctype,
 			value: this.docname,
-			filters: list_settings.filters,
-			sort_order: list_settings.sort_order,
-			sort_field: list_settings.sort_by,
+			filters,
+			sort_order,
+			sort_field,
 			prev,
 		};
 
 		frappe.call('frappe.desk.form.utils.get_next', args).then(r => {
 			if (r.message) {
 				frappe.set_route('Form', this.doctype, r.message);
+				this.focus_on_first_input();
 			}
 		});
+	}
+
+	focus_on_first_input() {
+		let $first_input_el = $(frappe.container.page).find('.frappe-control:visible').eq(0);
+		$first_input_el.find('input, select, textarea').focus();
 	}
 
 	rename_doc() {
@@ -1223,13 +1253,16 @@ frappe.ui.form.Form = class FrappeForm {
 	}
 
 	set_read_only() {
-		var perm = [];
-		var docperms = frappe.perm.get_perm(this.doc.doctype);
-		for (var i=0, l=docperms.length; i<l; i++) {
-			var p = docperms[i];
-			perm[p.permlevel || 0] = {read:1, print:1, cancel:1, email:1};
-		}
-		this.perm = perm;
+		const docperms = frappe.perm.get_perm(this.doc.doctype);
+		this.perm = docperms.map(p => {
+			return {
+				read: p.read,
+				cancel: p.cancel,
+				share: p.share,
+				print: p.print,
+				email: p.email
+			};
+		});
 	}
 
 	trigger(event, doctype, docname) {
@@ -1357,6 +1390,8 @@ frappe.ui.form.Form = class FrappeForm {
 				frappe.get_meta(doctype).fields.forEach(function(df) {
 					if(df.fieldtype==='Link' && df.options===me.doctype) {
 						new_doc[df.fieldname] = me.doc.name;
+					} else if (['Link', 'Dynamic Link'].includes(df.fieldtype) && me.doc[df.fieldname]) {
+						new_doc[df.fieldname] = me.doc[df.fieldname];
 					}
 				});
 
@@ -1382,6 +1417,28 @@ frappe.ui.form.Form = class FrappeForm {
 			sum += d[fieldname];
 		}
 		return sum;
+	}
+
+	scroll_to_field(fieldname) {
+		let field = this.get_field(fieldname);
+		if (!field) return;
+
+		let $el = field.$wrapper;
+
+		// uncollapse section
+		if (field.section.is_collapsed()) {
+			field.section.collapse(false);
+		}
+
+		// scroll to input
+		frappe.utils.scroll_to($el);
+
+		// highlight input
+		$el.addClass('has-error');
+		setTimeout(() => {
+			$el.removeClass('has-error');
+			$el.find('input, select, textarea').focus();
+		}, 1000);
 	}
 };
 

@@ -423,7 +423,7 @@ def clear_user_permissions_for_doctype(doctype, user=None):
 	filters = {'allow': doctype}
 	if user:
 		filters['user'] = user
-	user_permissions_for_doctype = frappe.db.get_list('User Permission', filters=filters)
+	user_permissions_for_doctype = frappe.db.get_all('User Permission', filters=filters)
 	for d in user_permissions_for_doctype:
 		frappe.delete_doc('User Permission', d.name)
 
@@ -549,3 +549,27 @@ def filter_allowed_docs_for_doctype(user_permissions, doctype, with_default_doc=
 def push_perm_check_log(log):
 	if frappe.flags.get('has_permission_check_logs') == None: return
 	frappe.flags.get('has_permission_check_logs').append(_(log))
+
+def has_web_form_permission(doctype, name, ptype='read'):
+	user = frappe.session.user
+	if user == "Guest":
+		return False
+
+	# owner matches
+	elif user == frappe.get_cached_value(doctype, name, "owner"):
+		return True
+
+	elif frappe.has_website_permission(name, ptype=ptype, doctype=doctype):
+		return True
+
+	elif check_webform_perm(doctype, name):
+		return True
+
+	else:
+		return False
+
+def check_webform_perm(doctype, name):
+	doc = frappe.get_doc(doctype, name)
+	if hasattr(doc, "has_webform_permission"):
+		if doc.has_webform_permission():
+			return True

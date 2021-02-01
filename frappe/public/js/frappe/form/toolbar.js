@@ -30,7 +30,8 @@ frappe.ui.form.Toolbar = Class.extend({
 	},
 	set_title: function() {
 		if(this.frm.meta.title_field) {
-			var title = strip_html((this.frm.doc[this.frm.meta.title_field] || "").trim() || this.frm.docname);
+			let title_field = (this.frm.doc[this.frm.meta.title_field] || "").toString().trim();
+			var title = strip_html(title_field || this.frm.docname);
 			if(this.frm.doc.__islocal || title === this.frm.docname || this.frm.meta.autoname==="hash") {
 				this.page.set_title_sub("");
 			} else {
@@ -52,10 +53,14 @@ frappe.ui.form.Toolbar = Class.extend({
 		this.set_indicator();
 	},
 	is_title_editable: function() {
-		if (this.frm.meta.title_field==="title"
+		let title_field = this.frm.meta.title_field;
+		let doc_field = this.frm.get_docfield(title_field);
+
+		if (title_field
 			&& this.frm.perm[0].write
-			&& !this.frm.get_docfield("title").options
-			&& !this.frm.doc.__islocal) {
+			&& !this.frm.doc.__islocal
+			&& doc_field.fieldtype === "Data"
+			&& !doc_field.read_only) {
 			return true;
 		} else {
 			return false;
@@ -64,25 +69,82 @@ frappe.ui.form.Toolbar = Class.extend({
 	can_rename: function() {
 		return this.frm.perm[0].write && this.frm.meta.allow_rename && !this.frm.doc.__islocal;
 	},
-	setup_editable_title: function() {
-		var me = this;
-		this.page.$title_area.find(".title-text").on("click", function() {
-			if(me.is_title_editable()) {
-				frappe.prompt({fieldname: "title", fieldtype:"Data",
-					label: __("Title"), reqd: 1, "default": me.frm.doc.title },
-					function(data) {
-						if(data.title) {
-							me.frm.set_value("title", data.title);
-							if(!me.frm.doc.__islocal) {
-								me.frm.save_or_update();
-							} else {
-								me.set_title();
-							}
-						}
-					}, __("Edit Title"), __("Update"));
+	setup_editable_title: function () {
+		let me = this;
+
+		this.page.$title_area.find(".title-text").on("click", () => {
+			let fields = [];
+			let doctype = me.frm.doctype;
+			let docname = me.frm.doc.name;
+			let title_field = me.frm.meta.title_field || '';
+
+			// check if title is updateable
+			if (me.is_title_editable()) {
+				let title_field_label = me.frm.get_docfield(title_field).label;
+
+				fields.push({
+					label: __("New {0}", [__(title_field_label)]),
+					fieldname: "title",
+					fieldtype: "Data",
+					reqd: 1,
+					default: me.frm.doc[title_field]
+				});
 			}
-			if(me.can_rename()) {
-				me.frm.rename_doc();
+
+			// check if docname is updateable
+			if (me.can_rename()) {
+				fields.push(...[{
+					label: __("New Name"),
+					fieldname: "name",
+					fieldtype: "Data",
+					reqd: 1,
+					default: docname
+				}, {
+					label: __("Merge with existing"),
+					fieldname: "merge",
+					fieldtype: "Check",
+					default: 0
+				}]);
+			}
+
+			// create dialog
+			if (fields.length > 0) {
+				let d = new frappe.ui.Dialog({
+					title: __("Rename"),
+					fields: fields
+				});
+				d.show();
+
+				d.set_primary_action(__("Rename"), function () {
+					let args = d.get_values();
+					if (args.title != me.frm.doc[title_field] || args.name != docname) {
+						frappe.call({
+							method: "frappe.model.rename_doc.update_document_title",
+							args: {
+								doctype,
+								docname,
+								title_field,
+								old_title: me.frm.doc[title_field],
+								new_title: args.title,
+								new_name: args.name,
+								merge: args.merge
+							},
+							btn: d.get_primary_btn()
+						}).then((res) => {
+							me.frm.reload_doc();
+							if (!res.exc && (args.name != docname)) {
+								$(document).trigger("rename", [doctype, docname, res.message || args.name]);
+								if (locals[doctype] && locals[doctype][docname]) delete locals[doctype][docname];
+							}
+						});
+					} else {
+						frappe.show_alert({
+							indicator: "yellow",
+							message: __("Unchanged")
+						});
+					}
+					d.hide();
+				});
 			}
 		});
 	},
@@ -90,11 +152,12 @@ frappe.ui.form.Toolbar = Class.extend({
 		return this.page.add_dropdown(label);
 	},
 	set_indicator: function() {
-		if(this.frm.save_disabled)
-			return;
-
 		var indicator = frappe.get_indicator(this.frm.doc);
-		if(indicator) {
+
+		if (indicator) {
+			if (this.frm.save_disabled && [__('Saved'), __('Not Saved')].includes(indicator[0])) {
+				return;
+			}
 			this.page.set_indicator(indicator[0], indicator[1]);
 		} else {
 			this.page.clear_indicator();
@@ -177,14 +240,24 @@ frappe.ui.form.Toolbar = Class.extend({
 			});
 		}
 
-		if(frappe.user_roles.includes("System Manager") && me.frm.meta.issingle === 0) {
-			this.page.add_menu_item(__("Customize"), function() {
-				frappe.set_route("Form", "Customize Form", {
-					doc_type: me.frm.doctype
-				})
-			}, true);
+		if (frappe.user_roles.includes("System Manager") && me.frm.meta.issingle === 0) {
+			let is_doctype_form = me.frm.doctype === 'DocType';
+			let doctype = is_doctype_form ? me.frm.docname : me.frm.doctype;
+			let is_doctype_custom = is_doctype_form ? me.frm.doc.custom : false;
 
-			if (frappe.boot.developer_mode===1) {
+			if (doctype != 'DocType' && !is_doctype_custom) {
+				this.page.add_menu_item(__("Customize"), function() {
+					if (me.frm.meta && me.frm.meta.custom) {
+						frappe.set_route('Form', 'DocType', doctype);
+					} else {
+						frappe.set_route('Form', 'Customize Form', {
+							doc_type: doctype
+						});
+					}
+				}, true);
+			}
+
+			if (frappe.boot.developer_mode===1 && !is_doctype_form) {
 				// edit doctype
 				this.page.add_menu_item(__("Edit DocType"), function() {
 					frappe.set_route('Form', 'DocType', me.frm.doctype);
@@ -274,23 +347,28 @@ frappe.ui.form.Toolbar = Class.extend({
 
 		var status = this.get_action_status();
 		if (status) {
-			if (status !== this.current_status) {
-				if (status === 'Amend') {
-					let doc = this.frm.doc;
-					frappe.xcall('frappe.client.is_document_amended', {
-						'doctype': doc.doctype,
-						'docname': doc.name
-					}).then(is_amended => {
-						if (is_amended) return;
-						this.set_page_actions(status);
-					});
-				} else {
+			// When moving from a page with status amend to another page with status amend
+			// We need to check if document is already amend specifically and hide
+			// or clear the menu actions accordingly
+
+			if (status !== this.current_status && status === 'Amend') {
+				let doc = this.frm.doc;
+				frappe.xcall('frappe.client.is_document_amended', {
+					'doctype': doc.doctype,
+					'docname': doc.name
+				}).then(is_amended => {
+					if (is_amended) {
+						this.page.clear_actions();
+						return;
+					}
 					this.set_page_actions(status);
-				}
+				});
+			} else {
+				this.set_page_actions(status);
 			}
 		} else {
 			this.page.clear_actions();
-			this.current_status = null
+			this.current_status = null;
 		}
 	},
 	get_action_status: function() {
@@ -331,9 +409,23 @@ frappe.ui.form.Toolbar = Class.extend({
 				me.frm.page.set_view('main');
 			}, 'octicon octicon-pencil');
 		} else if(status === "Cancel") {
-			this.page.set_secondary_action(__(status), function() {
-				me.frm.savecancel(this);
-			}, "octicon octicon-circle-slash");
+			let add_cancel_button = () => {
+				this.page.set_secondary_action(__(status), function() {
+					me.frm.savecancel(this);
+				}, "octicon octicon-circle-slash");
+			};
+			if (this.has_workflow()) {
+				frappe.xcall(
+					'frappe.model.workflow.can_cancel_document', {
+						'doctype': this.frm.doc.doctype,
+					}).then((can_cancel) => {
+					if (can_cancel) {
+						add_cancel_button();
+					}
+				});
+			} else {
+				add_cancel_button();
+			}
 		} else {
 			var click = {
 				"Save": function() {
@@ -411,25 +503,7 @@ frappe.ui.form.Toolbar = Class.extend({
 			primary_action_label: __('Go'),
 			primary_action: ({ fieldname }) => {
 				dialog.hide();
-				let field = this.frm.get_field(fieldname);
-				if (!field) return;
-
-				let $el = field.$wrapper;
-
-				// uncollapse section
-				if (field.section.is_collapsed()) {
-					field.section.collapse(false);
-				}
-
-				// scroll to input
-				frappe.utils.scroll_to($el);
-
-				// highlight input
-				$el.addClass('has-error');
-				setTimeout(() => {
-					$el.removeClass('has-error');
-					$el.find('input, select, textarea').focus();
-				}, 1000);
+				this.frm.scroll_to_field(fieldname);
 			}
 		});
 

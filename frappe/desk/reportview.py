@@ -9,8 +9,10 @@ from six.moves import range
 import frappe.permissions
 from frappe.model.db_query import DatabaseQuery
 from frappe import _
-from six import text_type, string_types, StringIO
+from six import string_types, StringIO
 from frappe.core.doctype.access_log.access_log import make_access_log
+from frappe.utils import cstr
+
 
 @frappe.whitelist()
 @frappe.read_only()
@@ -28,9 +30,12 @@ def get_form_params():
 	"""Stringify GET request parameters."""
 	data = frappe._dict(frappe.local.form_dict)
 
+	is_report = data.get('view') == 'Report'
+
 	data.pop('cmd', None)
 	data.pop('data', None)
 	data.pop('ignore_permissions', None)
+	data.pop('view', None)
 
 	if "csrf_token" in data:
 		del data["csrf_token"]
@@ -52,6 +57,8 @@ def get_form_params():
 		key = field.split(" as ")[0]
 
 		if key.startswith('count('): continue
+		if key.startswith('sum('): continue
+		if key.startswith('avg('): continue
 
 		if "." in key:
 			parenttype, fieldname = key.split(".")[0][4:-1], key.split(".")[1].strip("`")
@@ -61,10 +68,11 @@ def get_form_params():
 
 		df = frappe.get_meta(parenttype).get_field(fieldname)
 
+		fieldname = df.fieldname if df else None
 		report_hide = df.report_hide if df else None
 
-		# remove the field from the query if the report hide flag is set
-		if report_hide:
+		# remove the field from the query if the report hide flag is set and current view is Report
+		if report_hide and is_report:
 			fields.remove(field)
 
 
@@ -168,11 +176,11 @@ def export_query():
 		writer = csv.writer(f)
 		for r in data:
 			# encode only unicode type strings and not int, floats etc.
-			writer.writerow([handle_html(frappe.as_unicode(v)).encode('utf-8') \
+			writer.writerow([handle_html(frappe.as_unicode(v)) \
 				if isinstance(v, string_types) else v for v in r])
 
 		f.seek(0)
-		frappe.response['result'] = text_type(f.read(), 'utf-8')
+		frappe.response['result'] = cstr(f.read())
 		frappe.response['type'] = 'csv'
 		frappe.response['doctype'] = title
 
@@ -210,6 +218,8 @@ def get_labels(fields, doctype):
 	labels = []
 	for key in fields:
 		key = key.split(" as ")[0]
+
+		if key.startswith(('count(', 'sum(', 'avg(')): continue
 
 		if "." in key:
 			parenttype, fieldname = key.split(".")[0][4:-1], key.split(".")[1].strip("`")
@@ -257,13 +267,8 @@ def delete_bulk(doctype, items):
 @frappe.whitelist()
 @frappe.read_only()
 def get_sidebar_stats(stats, doctype, filters=[]):
-	cat_tags = frappe.db.sql("""select `tag`.parent as `category`, `tag`.tag_name as `tag`
-		from `tabTag Doc Category` as `docCat`
-		INNER JOIN  `tabTag` as `tag` on `tag`.parent = `docCat`.parent
-		where `docCat`.tagdoc=%s
-		ORDER BY `tag`.parent asc, `tag`.idx""", doctype, as_dict=1)
 
-	return {"defined_cat":cat_tags, "stats":get_stats(stats, doctype, filters)}
+	return {"stats": get_stats(stats, doctype, filters)}
 
 @frappe.whitelist()
 @frappe.read_only()

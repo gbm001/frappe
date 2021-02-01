@@ -47,7 +47,8 @@ def load_address_and_contact(doc, key=None):
 		contact["phone_nos"] = frappe.get_list("Contact Phone", filters={
 				"parenttype": "Contact",
 				"parent": contact.name,
-				"is_primary": 0
+				"is_primary_phone": 0,
+				"is_primary_mobile_no": 0
 			}, fields=["phone"])
 
 		if contact.address:
@@ -145,6 +146,8 @@ def delete_contact_and_address(doctype, docname):
 			if len(doc.links)==1:
 				doc.delete()
 
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
 def filter_dynamic_link_doctypes(doctype, txt, searchfield, start, page_len, filters):
 	if not txt: txt = ""
 

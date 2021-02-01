@@ -36,7 +36,7 @@ class MyLink extends Link {
 	}
 }
 
-Quill.register(MyLink);
+Quill.register(MyLink, true);
 
 // image uploader
 const Uploader = Quill.import('modules/uploader');
@@ -147,7 +147,7 @@ frappe.ui.form.ControlTextEditor = frappe.ui.form.ControlCode.extend({
 			[{ 'color': [] }, { 'background': [] }],
 			['blockquote', 'code-block'],
 			['link', 'image'],
-			[{ 'list': 'ordered' }, { 'list': 'bullet' }],
+			[{ 'list': 'ordered' }, { 'list': 'bullet' }, { 'list': 'check' }],
 			[{ 'align': [] }],
 			[{ 'indent': '-1'}, { 'indent': '+1' }],
 			[{'table': [

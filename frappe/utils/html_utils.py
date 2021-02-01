@@ -10,8 +10,8 @@ def clean_html(html):
 		return html
 
 	return bleach.clean(clean_script_and_style(html),
-		tags=['div', 'p', 'br', 'ul', 'ol', 'li', 'b', 'i', 'em',
-                'table', 'thead', 'tbody', 'td', 'tr'],
+		tags=['div', 'p', 'br', 'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u',
+			'table', 'thead', 'tbody', 'td', 'tr'],
 		attributes=[],
 		styles=['color', 'border', 'border-color'],
 		strip=True, strip_comments=True)
@@ -21,7 +21,7 @@ def clean_email_html(html):
 		return html
 
 	return bleach.clean(clean_script_and_style(html),
-		tags=['div', 'p', 'br', 'ul', 'ol', 'li', 'b', 'i', 'em', 'a',
+		tags=['div', 'p', 'br', 'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u', 'a',
 			'table', 'thead', 'tbody', 'td', 'tr', 'th', 'pre', 'code',
 			'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'button', 'img'],
 		attributes=['border', 'colspan', 'rowspan',
@@ -32,7 +32,7 @@ def clean_email_html(html):
 			'margin', 'margin-top', 'margin-bottom', 'margin-left', 'margin-right',
 			'padding', 'padding-top', 'padding-bottom', 'padding-left', 'padding-right',
 			'font-size', 'font-weight', 'font-family', 'text-decoration',
-			'line-height', 'text-align', 'vertical-align'
+			'line-height', 'text-align', 'vertical-align', 'display'
 		],
 		protocols=['cid', 'http', 'https', 'mailto', 'data'],
 		strip=True, strip_comments=True)
@@ -55,6 +55,9 @@ def sanitize_html(html, linkify=False):
 		return html
 
 	elif is_json(html):
+		return html
+
+	if not bool(BeautifulSoup(html, 'html.parser').find()):
 		return html
 
 	tags = (acceptable_elements + svg_elements + mathml_elements
@@ -102,6 +105,11 @@ def get_icon_html(icon, small=False):
 			'<img src="{icon}">'.format(icon=icon)
 	else:
 		return "<i class='{icon}'></i>".format(icon=icon)
+
+def unescape_html(value):
+	from six.moves.html_parser import HTMLParser
+	h = HTMLParser()
+	return h.unescape(value)
 
 # adapted from https://raw.githubusercontent.com/html5lib/html5lib-python/4aa79f113e7486c7ec5d15a6e1777bfe546d3259/html5lib/sanitizer.py
 acceptable_elements = [
@@ -163,7 +171,8 @@ acceptable_attributes = [
 	'width', 'wrap', 'xml:lang', 'data-row', 'data-list', 'data-language',
 	'data-value', 'role', 'frameborder', 'allowfullscreen', 'spellcheck',
 	'data-mode', 'data-gramm', 'data-placeholder', 'data-comment',
-	'data-id', 'data-denotation-char'
+	'data-id', 'data-denotation-char', 'itemprop', 'itemscope',
+	'itemtype', 'itemid', 'itemref', 'datetime'
 ]
 
 mathml_attributes = [

@@ -620,7 +620,12 @@
  },
  "Congo, The Democratic Republic of the": {
   "code": "cd",
-  "number_format": "#,###.##"
+  "number_format": "#,###.##",
+  "currency": "CDF",
+  "currency_name": "Congolese franc",
+  "currency_symbol": "FC",
+  "currency_fraction": "Centime",
+  "currency_fraction_units": 100
  },
  "Cook Islands": {
   "code": "ck",
@@ -810,10 +815,10 @@
  },
  "Estonia": {
   "code": "ee",
-  "currency": "EEK",
+  "currency": "EUR",
   "currency_fraction": "Cent",
   "currency_fraction_units": 100,
-  "currency_name": "Kroon",
+  "currency_name": "Euro",
   "currency_symbol": "\u20ac",
   "number_format": "#,###.##",
   "timezones": [

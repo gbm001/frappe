@@ -46,7 +46,7 @@ def start_scheduler():
 	'''Run enqueue_events_for_all_sites every 2 minutes (default).
 	Specify scheduler_interval in seconds in common_site_config.json'''
 
-	schedule.every(60).seconds.do(enqueue_events_for_all_sites)
+	schedule.every(frappe.get_conf().scheduler_tick_interval or 60).seconds.do(enqueue_events_for_all_sites)
 
 	while True:
 		schedule.run_pending()
@@ -66,9 +66,8 @@ def enqueue_events_for_all_sites():
 	for site in sites:
 		try:
 			enqueue_events_for_site(site=site, queued_jobs=jobs_per_site[site])
-		except:
-			# it should try to enqueue other sites
-			print(frappe.get_traceback())
+		except Exception as e:
+			print(e.__class__, 'Failed to enqueue events for site: {}'.format(site))
 
 def enqueue_events_for_site(site, queued_jobs):
 	def log_and_raise():
@@ -337,3 +336,10 @@ def get_last_active():
 		WHERE `user_type` = 'System User' AND `name` NOT IN ({standard_users})"""
 		.format(standard_users=", ".join(["%s"]*len(STANDARD_USERS))),
 		STANDARD_USERS)[0][0]
+
+@frappe.whitelist()
+def activate_scheduler():
+	if is_scheduler_disabled():
+		enable_scheduler()
+	if frappe.conf.pause_scheduler:
+		update_site_config('pause_scheduler', 0)
